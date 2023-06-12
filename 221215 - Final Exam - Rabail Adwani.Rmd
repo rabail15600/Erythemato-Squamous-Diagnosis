@@ -1,0 +1,439 @@
+---
+title: "221216 - Final Exam - Rabail Adwani"
+author: "Rabail Adwani"
+date: "2022-12-16"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data description
+
+The dataset provides clinical and histopathological features to conduct
+differential diagnosis of erythemato-squamous diseases including psoriasis, 
+seboreic dermatitis, lichen planus, pityriasis rosea, cronic dermatitis, and 
+pityriasis rubra pilaris. It is hard to conduct differential diagonisis in 
+erythemato-squamous diseases because they share similar features. Moreover, 
+features of one disease may show up in another in initial stages and may follow-
+up with characteristic features in the following stages. The dataset includes 12
+clinical features that were collected from patients and 22 histopathological 
+features which were examined using skin samples of patients. 32 of the the 34 
+variables except Age and family history are given a range from 0 to 3 where 0 
+implies  absence of feature and 3 indicates highest amount possible. The binary 
+classification of family history variable indicates if any of these diseases
+have been observed in the family. There are a total 34 attributes with 366
+number of instances.
+
+# Target variable
+
+The target is the classification of the erythemato-squamous disease group.
+
+    1. psoriasis
+    2. seboreic dermatitis
+    3. lichen planus
+    4. pityriasis rosea
+    5. cronic dermatitis
+    6. pityriasis rubra pilaris
+    
+# Variable information
+
+Take values of the variables from 0 to 3 unless otherwise stated.
+
+Clinical Attributes:
+
+      1: erythema
+      2: scaling
+      3: definite borders
+      4: itching
+      5: koebner phenomenon
+      6: polygonal papules
+      7: follicular papules
+      8: oral mucosal involvement
+      9: knee and elbow involvement
+     10: scalp involvement
+     11: family history, (0 or 1)
+     34: Age (linear)
+
+Histopathological Attributes:
+
+     12: melanin incontinence
+     13: eosinophils in the infiltrate
+     14: PNL infiltrate
+     15: fibrosis of the papillary dermis
+     16: exocytosis
+     17: acanthosis
+     18: hyperkeratosis
+     19: parakeratosis
+     20: clubbing of the rete ridges
+     21: elongation of the rete ridges
+     22: thinning of the suprapapillary epidermis
+     23: spongiform pustule
+     24: munro microabcess
+     25: focal hypergranulosis
+     26: disappearance of the granular layer
+     27: vacuolisation and damage of basal layer
+     28: spongiosis
+     29: saw-tooth appearance of retes
+     30: follicular horn plug
+     31: perifollicular parakeratosis
+     32: inflammatory monoluclear inflitrate
+     33: band-like infiltrate
+
+# Statistical models applied
+
+As the target variable which is the type of erythemato-squamous disease has more
+than two levels and is a nominal categorical variable, I will be using 
+generalized logit or multinomial logit model. Additionally, I will also be
+utilizing non-parametric methods based on regression trees such as decision
+tree, random forest, and gradient boosting to find suitable model to classify
+the subjects into the different disease groups. 
+
+```{r}
+
+library(dplyr)
+library(ordinal)
+library(fastDummies)
+library(car)
+library(sure)
+library(MASS)
+library(nnet)
+library(ggcorrplot)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+library(vip)
+library(xgboost)
+library(Matrix)
+library(caret)
+
+setwd("F:/MSDS/Applied Statistics for Data Science")
+data <- read.csv("Final Exam/dermatology.csv")
+str(data)
+
+```
+
+# Dealing with missing value
+
+The column of Age has a few missing values therefore, I have dropped it from
+analysis.
+
+```{r}
+
+# Check for missing values (Drop Age)
+data[,1:35][data[,1:35]=="?"] <- NA
+table(is.na(data$Age))
+data <- subset(data, select=-c(Age))
+table(is.na(data))
+
+ord.cols <- which(colnames(data) != c("family.history", "class"))
+nom.cols <- c("family.history", "class")
+
+
+```
+
+# Distribution of target
+
+The distribution of six erythemato-squamous disease groups looks fairly
+distributed.
+
+```{r}
+
+# Distribution of target
+barplot(table(data$class)/nrow(data)*100, col = "Yellow", ylab="Proportion")
+
+```
+
+# Erythemato-squamous disease groups by family history
+
+Looking at the erythemato-squamous disease groups by family history, we can 
+clearly see that people with a family history of erythemato-squamous diseases
+are more prone to psoriasis and pityriasis rubra pilaris. However, pityriasis 
+rubra pilaris is quite rare without family history. 
+
+Meanwhile,  pityriasis rosea and cronic dermatitis are not present in people
+with family history of erythemato-squamous diseases. Lichen planus is rare
+in people with any family history. Nevertheless, it is roughly as common as 
+psoriasis in case of no family history.
+
+```{r}
+
+# Disease by family history
+with(data , {
+y <- table (family.history , class)
+spineplot (y, col=c("red", "orange", "yellow", "purple", "grey", "green"), main =NA)
+})
+
+```
+
+# Check for multicollinearity
+
+To check for multicollinearity, I calculated spearman rank correlation of the
+data and excluded four variables that were highly correlated (>0.95).
+
+```{r}
+
+# Correlations
+data.cor <- cor(data[,ord.cols], method="spearman")
+data.cor[upper.tri(data.cor)] <- 0
+diag(data.cor) <- 0
+data1 <- data[, !apply(data.cor, 2, function(x) any(abs(x) > 0.95, na.rm = TRUE))]
+
+```
+
+# Encoding nominal and ordinal categorical variables
+
+I encoded the features (clinical and histopathological) as ordered factors that
+were given a degree in the range of 0 to 3. Meanwhile, class (target variable)
+and family history were coded as factors. Additionally, I recoded the levels of 
+class (target variable) from 1-6 to 0-5.
+
+```{r}
+
+# Encoding nominal and ordinal categorical variables
+
+my_fun <- function(i){
+  factor(i, ordered=TRUE, levels=c(0,1,2,3))
+}
+
+ord.cols2 <- which(colnames(data1) != c("family.history", "class"))
+
+data1[,ord.cols2] <- lapply(data1[,ord.cols2], my_fun)
+data1$class <- as.factor(data1$class)
+
+# Converting class values to start from 0 because it is a prerequisite for xgboost
+levels(data1$class) <- c(0,1,2,3,4,5)
+
+```
+
+# Partioning the data into training and testing at 80-20
+
+I have created balanced samples of training and testing sets to ensure that the 
+model is trained on distributions representing the real-world case
+
+```{r}
+
+# Partitioning the data into training and testing at 80-20
+set.seed(123457)
+strats <- data1$class
+rr <- split(1:length(strats), strats)
+p <- 0.8
+idx <- sort(as.numeric(unlist(sapply(rr, function(x) sample(x, length(x) * p)))))
+derm.train <- data1[idx,]
+table(derm.train$class)/nrow(derm.train)
+derm.test <- data1[-idx,]
+table(derm.test$class)/nrow(derm.test)
+
+```
+
+# Multinomial logit
+
+Multinomial logistic regression is a classification method that generalizes
+logistic regression to multiclass problems. Given a set of predictor variables,
+it predicts outcomes of categorical (or polytomous) responses that has more than
+two levels. With a fit of multinomial logit model to the L = 6 
+erythemato-squamous disease types, I received a test accuracy rate of 90.8%. As 
+for the statistics by class, the sensitivity is slightly lower for class 3 and 5.
+
+
+```{r}
+
+##############################################################################
+# Multinomial logit
+##############################################################################
+
+fit.gl <- multinom(class ~ ., data = derm.train)
+summary(fit.gl)
+
+# Multinomial model evaluation
+
+# Training
+# Predicting values of derm.train
+derm.train.pred <- predict(fit.gl, newdata = derm.train, type="class")
+table=cbind(derm.train$class,derm.train.pred)
+
+# Classification table
+(ctable.pred.train <- table(derm.train$class, derm.train.pred))
+
+# Accuracy
+round((sum(diag(ctable.pred.train))/sum(ctable.pred.train))*100,2)
+
+
+# Testing
+# Predicting values of derm.test
+derm.test.pred <- predict(fit.gl, newdata = derm.test, type="class")
+table=cbind(derm.test$class,derm.test.pred)
+
+# Classification table
+(ctable.pred.test <- table(derm.test$class, derm.test.pred))
+
+# Accuracy
+round((sum(diag(ctable.pred.test))/sum(ctable.pred.test))*100,2)
+
+confusionMatrix(derm.test.pred, derm.test$class)
+
+```
+# Decision tree
+
+A decision tree divides the data into different classes. It uses an algorithm
+to select features and create split points until a predetermined termination
+criterion is reached and a suitable tree is constructed. The tree repeatedly
+splits a node into two child nodes. With the decision tree, I received a accuracy
+rate of 97.4%. The sensitivity and specificity are significant for class except
+for the sensitivity of class 5. The accuracy rate for decision tree is better than
+both multinomial logit and random forest.
+
+```{r}
+
+###############################################################################
+# Decision tree
+###############################################################################
+
+# Growing tree
+fit.allp <- rpart(class~.,method="class", data=derm.train,
+                  control=rpart.control(minsplit=1, cp=0.001))
+
+printcp(fit.allp)
+plotcp(fit.allp) # visualize cross-validation results
+
+# Finding the value of Cp with smallest xerror
+(cp= fit.allp$cptable[which.min(fit.allp$cptable[,"xerror"]),"CP"]) # gives smallest xerror
+(xerr = fit.allp$cptable[which.min(fit.allp$cptable[,"xerror"]),"xerror"])
+
+# plot of tree
+rpart.plot(fit.allp, extra = "auto")
+
+###############################################################################
+# Pruning
+###############################################################################
+pfit.allp <- prune(fit.allp, cp= fit.allp$cptable[which.min(fit.allp$cptable[,"xerror"]),"CP"])
+
+# plot of tree
+rpart.plot(pfit.allp,extra = "auto")
+
+test.cart <- data.frame(actual=derm.test$class,pred=NA)
+test.cart$pred <- predict(pfit.allp, newdata = derm.test, type = "class")
+(conf_matrix_pruned_tree <- table(test.cart$actual,test.cart$pred))
+round((sum(diag(conf_matrix_pruned_tree))/sum(conf_matrix_pruned_tree))*100,2)
+
+confusionMatrix(test.cart$pred, derm.test$class)
+
+```
+
+# Random forest
+
+
+Random forest is an ensemble learning method that combines the output of multiple
+decision trees to reach a single result to avoid overfitting. Based on this
+predictive technique, I received a accuracy rate of 95.3%. However, the sensitivity
+and specificity are 100% for all class types. The accuracy rate is better than
+multinomial logit but lower than decision tree.
+
+```{r}
+
+###############################################################################
+# Random forest
+###############################################################################
+
+fit.rf.ranger <- ranger(class ~ ., data=derm.train, 
+                   importance='impurity', mtry=3)
+print(fit.rf.ranger)
+
+# Variable importance plot
+vip(fit.rf.ranger)
+
+# Evaluation of test
+pred.rf <- predict(fit.rf.ranger, data = derm.test)
+
+# Confusion matrix:
+test.rf <- data.frame(actual=derm.test$class,pred=NA)
+test.rf$pred <- pred.rf$predictions
+(conf_matrix_rf <- table(test.rf$actual,test.rf$pred))
+
+confusionMatrix(test.rf$pred, derm.test$class)
+
+```
+# Gradient boosting
+
+Gradient boosting is known for its good predictive performance in high
+dimensional datasets. Unlike random forest which creates an ensemble of
+independent deep trees, gradient boosting creates an ensemble for shallow trees
+where each tree learns from the previous tree minimizing the overall prediction
+error. With gradient boosting,  I received the highest accuracy rate of 98.7% as 
+compared to other models. Also, the sensitivity and specificity are significant 
+at 100% for all classes. This model is performing best on this dataset.
+
+```{r}
+
+###############################################################################
+# Gradient boosting
+###############################################################################
+
+# Transforming the predictors matrix using one-hot encoding
+matrix_predictors.train <- as.matrix(sparse.model.matrix(class ~ ., data = derm.train))[,-1]
+matrix_predictors.test <- as.matrix(sparse.model.matrix(class ~ ., data = derm.test))[,-1]
+
+# Set up features and label in a Dmatrix form for xgboost
+# Train dataset
+pred.train.gbm <- data.matrix(matrix_predictors.train) # predictors only
+# Converting factor to numeric
+derm.train.gbm <- as.numeric(as.character(derm.train$class))
+dtrain <- xgb.DMatrix(data = pred.train.gbm, label=derm.train.gbm)
+# Test dataset
+# Converting factor to numeric
+derm.test.gbm <- as.numeric(as.character(derm.test$class))
+pred.test.gbm <- data.matrix(matrix_predictors.test) # predictors only
+dtest <- xgb.DMatrix(data = pred.test.gbm, label=derm.test.gbm)
+
+#define watchlist
+watchlist <- list(train=dtrain, test=dtest)
+
+#define param
+numberOfClasses <- length(unique(data1$class))
+param <- list("objective" = "multi:softprob", "eval_metric" = "mlogloss",
+              "num_class" = numberOfClasses, verbose=0)
+
+# Fit xgb model
+model.xgb <- xgb.train(param, dtrain, nrounds = 2, watchlist, prediction=TRUE)
+
+model.xgb
+
+xgb.pred = predict(model.xgb,pred.test.gbm,reshape=T)
+xgb.pred = as.data.frame(xgb.pred)
+
+colnames(xgb.pred) = levels(data1$class)
+
+xgb.pred$prediction = apply(xgb.pred,1,function(x) colnames(xgb.pred)[which.max(x)])
+xgb.pred$label = levels(data1$class)[derm.test.gbm+1]
+
+# Accuracy
+result = sum(xgb.pred$prediction==xgb.pred$label)/nrow(xgb.pred)
+print(paste("Final Accuracy =",sprintf("%1.2f%%", 100*result)))
+
+confusionMatrix(as.factor(xgb.pred$prediction), as.factor(xgb.pred$label))
+
+```
+
+# Conclusion
+
+The rationale for undertaking this project is to solve the problem of conducting
+differential diagnosis for erythemato-squamous diseases. The reason why it is a 
+problem is because they all share the clinical features of erythema and scaling.
+In addition, one disease may show the features of another disease at the 
+beginning stage and may have the characteristic features at the following stages.
+The types of erythemato-squamous diseases include are psoriasis, seboreic 
+dermatitis, lichen planus, pityriasis rosea, cronic dermatitis, and pityriasis 
+rubra pilaris.
+
+By utilizing the clinical features obtained by evaluating patients and 
+histopathological features, which were determined by examining skin samples with
+a microscope, I have built a gradient boosting algorithm that performs best
+in predicting erythemato-squamous disease type. The accuracy rate of the model
+stands at 98.7%. In terms of statistics by class, the sensitivity and specificity 
+are also significant at 100% implying that ratio of false negative and false
+positive results will also be low.
+
+
